@@ -1,0 +1,25 @@
+{
+  "name": "@aegiscode/engine-sast",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AegisCode static analysis engine (Semgrep with AegisCode's own rules)",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@aegiscode/core": "*"
+  }
+}
