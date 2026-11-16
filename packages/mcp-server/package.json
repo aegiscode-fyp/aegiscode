@@ -31,7 +31,7 @@
   "scripts": {
     "build": "tsup && node scripts/copy-rules.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "smoke": "node scripts/smoke-test.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
