@@ -1,0 +1,5 @@
+<!-- Test cases for xss-templates.yaml (Handlebars). Deliberately vulnerable, never shipped. -->
+<!-- ruleid: aegiscode.javascript.xss.template-unescaped-output -->
+<div>{{{ comment.body }}}</div>
+<!-- ok: aegiscode.javascript.xss.template-unescaped-output -->
+<div>{{ comment.body }}</div>

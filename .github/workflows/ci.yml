@@ -40,3 +40,18 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  rule-tests:
+    name: rule-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Test AegisCode Semgrep rules (offline, in Docker)
+        run: node packages/engine-sast/scripts/test-rules.mjs

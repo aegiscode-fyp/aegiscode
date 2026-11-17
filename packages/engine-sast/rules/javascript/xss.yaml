@@ -1,0 +1,234 @@
+# AegisCode SAST rules: cross-site scripting in JavaScript/TypeScript code (CWE-79).
+# Template files (EJS, Pug, Handlebars, Vue, Svelte) are covered by xss-templates.yaml.
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+x-html-sanitizer: &html-sanitizer
+  patterns:
+    - pattern-either:
+        - pattern: $F(...)
+        - pattern: $O.$F(...)
+    - metavariable-regex:
+        metavariable: $F
+        regex: (?i)^(escape\w*|\w*escape|encode\w*|sanitize\w*|\w*sanitize|purify|xss|filterxss)$
+
+x-not-literal-or-sanitized: &not-literal-or-sanitized
+  metavariable-pattern:
+    metavariable: $HTML
+    patterns:
+      - pattern-not: '"..."'
+      - pattern-not: $O.sanitize(...)
+      - pattern-not: sanitize(...)
+      - pattern-not: sanitizeHtml(...)
+      - pattern-not: escapeHtml(...)
+      - pattern-not: $O.escape(...)
+      - pattern-not: $O.encode(...)
+      - pattern-not: xss(...)
+      - pattern-not: filterXSS(...)
+
+rules:
+  - id: aegiscode.javascript.xss.tainted-response
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input from the request is sent back in the response body. Express sends
+      strings as HTML, so an attacker can inject a <script> (reflected XSS). Escape
+      the value (e.g. with the escape-html package), send JSON with res.json(), or
+      render it through a template engine that escapes output.
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: high
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source]
+    pattern-sanitizers: [*number-sanitizer, *html-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($BODY)
+              - pattern: $RES.write($BODY, ...)
+              - pattern: $RES.end($BODY, ...)
+          - pattern-not: '$RES.send({...})'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: (?i)^_?res(ponse)?$
+          - focus-metavariable: $BODY
+
+  - id: aegiscode.javascript.xss.inner-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A non-constant value is written to innerHTML/outerHTML. If it contains user
+      data, any HTML or script in it runs in the page (DOM XSS). Use textContent for
+      text, or clean the HTML first with DOMPurify.sanitize().
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: medium
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $HTML
+          - pattern: $EL.outerHTML = $HTML
+          - pattern: $EL.innerHTML += $HTML
+          - pattern: $EL.outerHTML += $HTML
+      - *not-literal-or-sanitized
+
+  - id: aegiscode.javascript.xss.insert-adjacent-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A non-constant value is inserted as HTML (insertAdjacentHTML or
+      createContextualFragment). If it contains user data, scripts in it can run
+      (DOM XSS). Insert text with insertAdjacentText(), or sanitize with DOMPurify.
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: medium
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - pattern: $EL.insertAdjacentHTML($POS, $HTML)
+          - pattern: $RANGE.createContextualFragment($HTML)
+      - *not-literal-or-sanitized
+
+  - id: aegiscode.javascript.xss.document-write
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      document.write() is called with a non-constant value. Anything written is parsed
+      as HTML, so user data in it can run scripts (DOM XSS). Build the page with DOM
+      methods (createElement, textContent) instead.
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: medium
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - pattern: document.write($HTML)
+          - pattern: document.writeln($HTML)
+          - pattern: window.document.write($HTML)
+      - *not-literal-or-sanitized
+
+  - id: aegiscode.javascript.xss.react-dangerously-set-inner-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      dangerouslySetInnerHTML is given a non-constant value. React does not escape it,
+      so user data in it can run scripts (XSS). Render the value as a normal child
+      ({value}) or sanitize it with DOMPurify.sanitize() first.
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: medium
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - pattern: '<$EL ... dangerouslySetInnerHTML={{__html: $HTML}} ... />'
+          - pattern: '<$EL ... dangerouslySetInnerHTML={{__html: $HTML}} ...>...</$EL>'
+          - pattern: '{..., dangerouslySetInnerHTML: {__html: $HTML}, ...}'
+      - *not-literal-or-sanitized
+
+  - id: aegiscode.javascript.xss.jquery-html
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      jQuery parses this value as HTML. If it contains user data, scripts in it run
+      (DOM XSS). Use .text() for text, or build elements with $("<li>").text(value).
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: medium
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $JQ(...).html($HTML)
+              - *not-literal-or-sanitized
+          - patterns:
+              - pattern-either:
+                  - patterns:
+                      - pattern: $JQ(...).$METHOD($HTML)
+                      - metavariable-regex:
+                          metavariable: $METHOD
+                          regex: ^(append|prepend|after|before|replaceWith|wrap)$
+                  - pattern: $JQ($HTML)
+              - metavariable-pattern:
+                  metavariable: $HTML
+                  patterns:
+                    - pattern-either:
+                        - patterns:
+                            - pattern: '"$TAG" + $X'
+                            - metavariable-regex:
+                                metavariable: $TAG
+                                regex: ^\s*<
+                        - patterns:
+                            - pattern: '`...${$X}...`'
+                            - pattern-regex: ^`\s*<
+                    - metavariable-pattern:
+                        metavariable: $X
+                        patterns:
+                          - pattern-not: '"..."'
+      - metavariable-regex:
+          metavariable: $JQ
+          regex: ^(\$|jQuery)$
+
+  - id: aegiscode.javascript.xss.template-escaping-disabled
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Automatic HTML escaping of a template engine is turned off or bypassed
+      (autoescape: false, noEscape: true, Handlebars.SafeString, or an overridden
+      Mustache.escape). Every value rendered this way can inject HTML and scripts.
+      Keep escaping on and mark only trusted, constant HTML as safe.
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: medium
+      confidence: medium
+    pattern-either:
+      - pattern: '$F(..., {..., autoescape: false, ...}, ...)'
+      - pattern: 'new $C(..., {..., autoescape: false, ...}, ...)'
+      - pattern: '$H.compile($T, {..., noEscape: true, ...})'
+      - patterns:
+          - pattern-either:
+              - pattern: new $H.SafeString($HTML)
+              - pattern: new SafeString($HTML)
+          - *not-literal-or-sanitized
+      - pattern: $M.escape = $FN

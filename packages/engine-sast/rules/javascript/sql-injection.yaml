@@ -1,0 +1,236 @@
+# AegisCode SAST rules: SQL injection (CWE-89).
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-koa-source: &koa-source
+  patterns:
+    - pattern-either:
+        - pattern: $CTX.request.body
+        - pattern: $CTX.request.query
+        - pattern: $CTX.query
+        - pattern: $CTX.params
+    - metavariable-regex:
+        metavariable: $CTX
+        regex: ^ctx$
+
+x-nest-source: &nest-source
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $M(..., @$D(...) $P: $T, ...) {...}
+        - pattern-inside: |
+            $M(..., @$D(...) $P, ...) {...}
+    - metavariable-regex:
+        metavariable: $D
+        regex: ^(Body|Query|Param|Headers|Req|Request)$
+    - focus-metavariable: $P
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+x-sql-escape-sanitizer: &sql-escape-sanitizer
+  pattern-either:
+    - pattern: $O.escape(...)
+    - pattern: $O.escapeId(...)
+    - pattern: escape(...)
+
+rules:
+  - id: aegiscode.javascript.sql-injection.tainted-query
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input from the request reaches a SQL query. An attacker can change the
+      query (SQL injection) and read or modify the whole database. Pass the value as
+      a query parameter instead, e.g. db.query("SELECT * FROM users WHERE id = ?", [id])
+      or "... WHERE id = $1" with PostgreSQL.
+    metadata:
+      vulnerability_type: sql-injection
+      cwe: "CWE-89"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer, *sql-escape-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.$METHOD($QUERY, ...)
+              - pattern: '$DB.$METHOD({..., sql: $QUERY, ...}, ...)'
+              - pattern: '$DB.$METHOD({..., text: $QUERY, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(query|execute)$
+          - focus-metavariable: $QUERY
+      - patterns:
+          - pattern: $DB.$METHOD($QUERY, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(run|all|get|each|exec|prepare)$
+          - metavariable-regex:
+              metavariable: $DB
+              regex: (?i)^(.*\.)?(db|database|sqlite\w*|conn|connection)$
+          - focus-metavariable: $QUERY
+
+  - id: aegiscode.javascript.sql-injection.string-built-query
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      SQL query is built by inserting a variable into the query text. If an attacker
+      controls that variable they can change the query (SQL injection). Use a
+      parameterized query instead, e.g. db.query("SELECT ... WHERE id = ?", [id]).
+    metadata:
+      vulnerability_type: sql-injection
+      cwe: "CWE-89"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: high
+      confidence: medium
+    options:
+      symbolic_propagation: true
+    patterns:
+      - pattern: $DB.$METHOD($QUERY, ...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(query|execute)$
+      - metavariable-pattern:
+          metavariable: $QUERY
+          patterns:
+            - pattern-either:
+                - pattern: '$OTHER + $INPUT'
+                - pattern: '$INPUT + $OTHER'
+                - pattern: '`...${$INPUT}...`'
+                - pattern: '"...".concat(..., $INPUT, ...)'
+            - metavariable-pattern:
+                metavariable: $INPUT
+                patterns:
+                  - pattern-not: '"..."'
+                  - pattern-not: $A + $B
+                  - pattern-not: '`...`'
+                  - pattern-not: parseInt(...)
+                  - pattern-not: Number(...)
+                  - pattern-not: $O.escape(...)
+                  - pattern-not-regex: ^\d+$
+
+  - id: aegiscode.javascript.sql-injection.sequelize-literal
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input from the request is placed in Sequelize.literal() or Sequelize.where()
+      raw SQL. Sequelize does not escape literal SQL, so this is SQL injection. Use
+      normal where-objects ({ where: { id } }) or bind parameters ({ bind: [id] }).
+    metadata:
+      vulnerability_type: sql-injection
+      cwe: "CWE-89"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer, *sql-escape-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $S.literal($SQL)
+              - pattern: literal($SQL)
+          - focus-metavariable: $SQL
+
+  - id: aegiscode.javascript.sql-injection.knex-raw
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input from the request is inserted into raw SQL for Knex (raw, whereRaw,
+      orderByRaw, ...). Raw SQL is not escaped, so this is SQL injection. Use bindings:
+      knex.raw("... WHERE id = ?", [id]) or the normal builder (.where("id", id)).
+    metadata:
+      vulnerability_type: sql-injection
+      cwe: "CWE-89"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer, *sql-escape-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern: $K.$METHOD($SQL, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(raw|whereRaw|andWhereRaw|orWhereRaw|havingRaw|orderByRaw|groupByRaw|joinRaw|fromRaw)$
+          - focus-metavariable: $SQL
+
+  - id: aegiscode.javascript.sql-injection.query-builder-string
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input from the request is concatenated into a query-builder condition
+      (e.g. TypeORM .where(`id = ${id}`)). The condition is raw SQL, so this is SQL
+      injection. Use named parameters: .where("user.id = :id", { id }).
+    metadata:
+      vulnerability_type: sql-injection
+      cwe: "CWE-89"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer, *sql-escape-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern: $QB.$METHOD($COND, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(where|andWhere|orWhere|having|andHaving|orHaving|orderBy|addOrderBy|select|addSelect)$
+          - metavariable-pattern:
+              metavariable: $COND
+              pattern-either:
+                - pattern: $A + $B
+                - pattern: '`...`'
+          - focus-metavariable: $COND
+
+  - id: aegiscode.javascript.sql-injection.prisma-unsafe-raw
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Prisma $queryRawUnsafe / $executeRawUnsafe is called with a query built from
+      variables. These methods do not escape anything. Use the tagged-template form
+      prisma.$queryRaw`SELECT ... WHERE id = ${id}`, which sends values as parameters.
+    metadata:
+      vulnerability_type: sql-injection
+      cwe: "CWE-89"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: high
+      confidence: medium
+    options:
+      symbolic_propagation: true
+    patterns:
+      - pattern-either:
+          - pattern: $P.$queryRawUnsafe($SQL, ...)
+          - pattern: $P.$executeRawUnsafe($SQL, ...)
+          - pattern: Prisma.raw($SQL)
+      - pattern-not: $P.$queryRawUnsafe("...", ...)
+      - pattern-not: $P.$executeRawUnsafe("...", ...)
+      - pattern-not: Prisma.raw("...")

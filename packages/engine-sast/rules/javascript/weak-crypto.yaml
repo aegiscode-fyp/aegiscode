@@ -1,0 +1,185 @@
+# AegisCode SAST rules: weak cryptography (CWE-327, CWE-328, CWE-338, CWE-326, CWE-1204, CWE-295).
+
+rules:
+  - id: aegiscode.javascript.weak-crypto.weak-hash
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      MD5 / SHA-1 (or another broken hash) is used. Collisions can be produced for
+      these algorithms, so they must not protect passwords, signatures, tokens or
+      file integrity. Use SHA-256 or better, and bcrypt/scrypt/argon2 for passwords.
+    metadata:
+      vulnerability_type: weak-crypto
+      cwe: "CWE-328"
+      owasp: ["A02:2021 - Cryptographic Failures", "A04:2025 - Cryptographic Failures"]
+      aegiscode_severity: medium
+      confidence: medium
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $CRYPTO.createHash("$ALG", ...)
+              - pattern: createHash("$ALG", ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i)^(md2|md4|md5|sha1|sha-1|ripemd|ripemd160|rmd160)$
+      - patterns:
+          - pattern: $CJ.$ALG(...)
+          - metavariable-regex:
+              metavariable: $CJ
+              regex: ^(CryptoJS|cryptoJs|cryptojs)$
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: ^(MD5|SHA1|RIPEMD160)$
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $FN = require("$MOD")
+                  ...
+              - pattern-inside: |
+                  import $FN from "$MOD"
+                  ...
+          - pattern: $FN(...)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(md5|sha1|js-md5|crypto-js/md5|crypto-js/sha1)$
+
+  - id: aegiscode.javascript.weak-crypto.weak-cipher
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A broken or weak cipher or mode is used (DES, 3DES, RC2, RC4, Blowfish or ECB
+      mode). Encrypted data can be recovered or its patterns seen. Use AES-256-GCM
+      (or ChaCha20-Poly1305) with a random IV for every message.
+    metadata:
+      vulnerability_type: weak-crypto
+      cwe: "CWE-327"
+      owasp: ["A02:2021 - Cryptographic Failures", "A04:2025 - Cryptographic Failures"]
+      aegiscode_severity: high
+      confidence: high
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $CRYPTO.createCipheriv("$ALG", ...)
+              - pattern: $CRYPTO.createDecipheriv("$ALG", ...)
+              - pattern: createCipheriv("$ALG", ...)
+              - pattern: createDecipheriv("$ALG", ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i)^(des.*|3des.*|rc2.*|rc4.*|bf|bf-.*|blowfish.*|cast.*|idea.*|.*-ecb)$
+      - patterns:
+          - pattern-either:
+              - pattern: $CJ.$ALG.encrypt(...)
+              - pattern: $CJ.$ALG.decrypt(...)
+          - metavariable-regex:
+              metavariable: $CJ
+              regex: ^(CryptoJS|cryptoJs|cryptojs)$
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: ^(DES|TripleDES|RC4|RC4Drop|Rabbit)$
+      - pattern: '{..., mode: $CJ.mode.ECB, ...}'
+
+  - id: aegiscode.javascript.weak-crypto.static-or-missing-iv
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Encryption uses no IV (crypto.createCipher, removed from recent Node.js
+      versions) or a fixed IV. With a fixed IV the same plaintext always gives the
+      same ciphertext, and for GCM/CTR it can expose the key stream. Generate a new
+      IV for each encryption with crypto.randomBytes() and store it with the ciphertext.
+    metadata:
+      vulnerability_type: weak-crypto
+      cwe: "CWE-1204"
+      owasp: ["A02:2021 - Cryptographic Failures", "A04:2025 - Cryptographic Failures"]
+      aegiscode_severity: high
+      confidence: high
+    options:
+      symbolic_propagation: true
+    pattern-either:
+      - pattern: $CRYPTO.createCipher(...)
+      - pattern: $CRYPTO.createDecipher(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $CRYPTO.createCipheriv($ALG, $KEY, $IV, ...)
+              - pattern: createCipheriv($ALG, $KEY, $IV, ...)
+          - metavariable-pattern:
+              metavariable: $IV
+              pattern-either:
+                - pattern: '"..."'
+                - pattern: Buffer.from("...", ...)
+                - pattern: Buffer.from([...], ...)
+                - pattern: Buffer.alloc(...)
+                - pattern: new Uint8Array($N)
+
+  - id: aegiscode.javascript.weak-crypto.insecure-random
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Math.random() is used to make a security value (token, password, OTP, salt,
+      session id...). Its output can be predicted. Use crypto.randomBytes(),
+      crypto.randomInt() or crypto.randomUUID() instead.
+    metadata:
+      vulnerability_type: weak-crypto
+      cwe: "CWE-338"
+      owasp: ["A02:2021 - Cryptographic Failures", "A04:2025 - Cryptographic Failures"]
+      aegiscode_severity: medium
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - pattern: $NAME = <... Math.random() ...>
+          - pattern: $OBJ.$NAME = <... Math.random() ...>
+          - pattern: '{..., $NAME: <... Math.random() ...>, ...}'
+          - pattern: |
+              function $NAME(...) {
+                ...
+                return <... Math.random() ...>;
+              }
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: (?i)^.*(token|secret|passw|nonce|salt|otp|session_?id|api_?key|csrf|reset_?code|verif\w*_?code|invite_?code|one_?time).*$
+      - focus-metavariable: $NAME
+
+  - id: aegiscode.javascript.weak-crypto.weak-rsa-key
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      An RSA/DSA key shorter than 2048 bits is generated. Such keys can be broken with
+      practical effort. Use at least 2048 bits (3072+ for long-term keys), or an
+      elliptic-curve key (namedCurve "P-256" or ed25519).
+    metadata:
+      vulnerability_type: weak-crypto
+      cwe: "CWE-326"
+      owasp: ["A02:2021 - Cryptographic Failures", "A04:2025 - Cryptographic Failures"]
+      aegiscode_severity: medium
+      confidence: high
+    patterns:
+      - pattern-either:
+          - pattern: '$CRYPTO.generateKeyPair("$TYPE", {..., modulusLength: $BITS, ...}, ...)'
+          - pattern: '$CRYPTO.generateKeyPairSync("$TYPE", {..., modulusLength: $BITS, ...})'
+          - pattern: '$FORGE.pki.rsa.generateKeyPair({..., bits: $BITS, ...}, ...)'
+          - pattern: $FORGE.pki.rsa.generateKeyPair($BITS, ...)
+          - pattern: 'new NodeRSA({..., b: $BITS, ...})'
+      - metavariable-comparison:
+          metavariable: $BITS
+          comparison: $BITS < 2048
+
+  - id: aegiscode.javascript.weak-crypto.tls-verification-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      TLS certificate checking is turned off (rejectUnauthorized: false,
+      strictSSL: false or NODE_TLS_REJECT_UNAUTHORIZED=0). Anyone on the network path
+      can impersonate the server and read or change the traffic. Keep verification on
+      and add the needed CA with the `ca` option instead.
+    metadata:
+      vulnerability_type: weak-crypto
+      cwe: "CWE-295"
+      owasp: ["A07:2021 - Identification and Authentication Failures", "A07:2025 - Authentication Failures"]
+      aegiscode_severity: high
+      confidence: high
+    pattern-either:
+      - pattern: '{..., rejectUnauthorized: false, ...}'
+      - pattern: '{..., strictSSL: false, ...}'
+      - pattern: $OBJ.rejectUnauthorized = false
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = 0
+      - pattern: process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"

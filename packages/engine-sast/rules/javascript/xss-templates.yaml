@@ -1,0 +1,35 @@
+# AegisCode SAST rules: unescaped output in template files (CWE-79).
+# Generic (text) matching, limited to template file types by `paths.include`.
+
+rules:
+  - id: aegiscode.javascript.xss.template-unescaped-output
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      This template prints a value without HTML escaping (EJS <%- %>, Handlebars
+      {{{ }}}, Pug != or !{}, Vue v-html, Svelte {@html}). If the value contains user
+      data, scripts in it run in the page (XSS). Use the escaping form instead
+      (<%= %>, {{ }}, =, #{}, {{ }} text, plain {value}).
+    metadata:
+      vulnerability_type: xss
+      cwe: "CWE-79"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: medium
+      confidence: medium
+    paths:
+      include:
+        - "*.ejs"
+        - "*.hbs"
+        - "*.handlebars"
+        - "*.mustache"
+        - "*.pug"
+        - "*.jade"
+        - "*.vue"
+        - "*.svelte"
+    pattern-either:
+      - pattern-regex: <%-(?!\s*include\b)
+      - pattern-regex: \{\{\{\s*[^}\s]
+      - pattern-regex: (?m)^\s*([\w#.\-]+(\([^)\n]*\))?)?!=\s*\S
+      - pattern-regex: '!\{[^}]+\}'
+      - pattern-regex: \bv-html\s*=
+      - pattern-regex: \{@html\s

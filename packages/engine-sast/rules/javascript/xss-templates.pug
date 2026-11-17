@@ -1,0 +1,11 @@
+// Test cases for xss-templates.yaml (Pug). Deliberately vulnerable, never shipped.
+// ruleid: aegiscode.javascript.xss.template-unescaped-output
+p!= user.bio
+// ruleid: aegiscode.javascript.xss.template-unescaped-output
+p Welcome back !{user.name}
+// ok: aegiscode.javascript.xss.template-unescaped-output
+p= user.bio
+// ok: aegiscode.javascript.xss.template-unescaped-output
+p Welcome back #{user.name}
+// ok: aegiscode.javascript.xss.template-unescaped-output
+- if (user.role != "admin")

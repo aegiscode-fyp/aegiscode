@@ -1,0 +1,142 @@
+# AegisCode SAST rules: server-side request forgery (CWE-918).
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-koa-source: &koa-source
+  patterns:
+    - pattern-either:
+        - pattern: $CTX.request.body
+        - pattern: $CTX.request.query
+        - pattern: $CTX.query
+        - pattern: $CTX.params
+    - metavariable-regex:
+        metavariable: $CTX
+        regex: ^ctx$
+
+x-nest-source: &nest-source
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $M(..., @$D(...) $P: $T, ...) {...}
+        - pattern-inside: |
+            $M(..., @$D(...) $P, ...) {...}
+    - metavariable-regex:
+        metavariable: $D
+        regex: ^(Body|Query|Param|Headers|Req|Request)$
+    - focus-metavariable: $P
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+x-ssrf-owasp: &ssrf-owasp ["A10:2021 - Server-Side Request Forgery (SSRF)", "A01:2025 - Broken Access Control"]
+
+rules:
+  - id: aegiscode.javascript.ssrf.tainted-request-url
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      The server makes an HTTP request to a URL taken from the request. An attacker can
+      make it call internal services (http://localhost:..., cloud metadata at
+      169.254.169.254) and read the answers (SSRF). Allow only known hosts: parse the
+      URL with new URL() and check its hostname against an allow-list.
+    metadata:
+      vulnerability_type: ssrf
+      cwe: "CWE-918"
+      owasp: *ssrf-owasp
+      aegiscode_severity: high
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern: fetch($URL, ...)
+                      - pattern: axios($URL, ...)
+                      - pattern: got($URL, ...)
+                      - pattern: request($URL, ...)
+                      - pattern: needle($METHOD, $URL, ...)
+                      - patterns:
+                          - pattern: $CLIENT.$METHOD($URL, ...)
+                          - metavariable-regex:
+                              metavariable: $CLIENT
+                              regex: ^(axios|got|request|superagent|needle|undici|ky|http|https)$
+                          - metavariable-regex:
+                              metavariable: $METHOD
+                              regex: ^(get|post|put|patch|delete|head|options|request|stream|fetch)$
+                  - metavariable-pattern:
+                      metavariable: $URL
+                      patterns:
+                        - pattern-not: '{...}'
+              - patterns:
+                  - pattern-either:
+                      - pattern: '$CLIENT({..., url: $URL, ...})'
+                      - pattern: '$CLIENT.request({..., url: $URL, ...})'
+                  - metavariable-regex:
+                      metavariable: $CLIENT
+                      regex: ^(axios|got|request|ky|needle|superagent|undici)$
+          - metavariable-regex:
+              metavariable: $URL
+              regex: (?s)^(?!["'`]https?://[^/"'`$]+/).*
+          - focus-metavariable: $URL
+
+  - id: aegiscode.javascript.ssrf.tainted-request-host
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      The host or base URL of an outgoing HTTP request comes from the request (host /
+      hostname options, axios baseURL, or the base of new URL()). An attacker can send
+      the server's requests to internal systems (SSRF). Choose the host from a fixed
+      configuration value, never from user input.
+    metadata:
+      vulnerability_type: ssrf
+      cwe: "CWE-918"
+      owasp: *ssrf-owasp
+      aegiscode_severity: high
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: '$HTTP.$METHOD({..., host: $HOST, ...}, ...)'
+              - pattern: '$HTTP.$METHOD({..., hostname: $HOST, ...}, ...)'
+          - metavariable-regex:
+              metavariable: $HTTP
+              regex: ^(http|https|http2)$
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|request|connect)$
+          - focus-metavariable: $HOST
+      - patterns:
+          - pattern-either:
+              - pattern: '$AXIOS.create({..., baseURL: $HOST, ...})'
+              - pattern: '$AXIOS({..., baseURL: $HOST, ...})'
+              - pattern: new URL($PATH, $HOST)
+          - focus-metavariable: $HOST
