@@ -1,0 +1,163 @@
+# AegisCode SAST rules: NoSQL (MongoDB / Mongoose) injection (CWE-943).
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-koa-source: &koa-source
+  patterns:
+    - pattern-either:
+        - pattern: $CTX.request.body
+        - pattern: $CTX.request.query
+        - pattern: $CTX.query
+        - pattern: $CTX.params
+    - metavariable-regex:
+        metavariable: $CTX
+        regex: ^ctx$
+
+x-nest-source: &nest-source
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $M(..., @$D(...) $P: $T, ...) {...}
+        - pattern-inside: |
+            $M(..., @$D(...) $P, ...) {...}
+    - metavariable-regex:
+        metavariable: $D
+        regex: ^(Body|Query|Param|Headers|Req|Request)$
+    - focus-metavariable: $P
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+# Converting to a string (or an ObjectId) removes injected query operators such as {"$ne": null}.
+x-to-string-sanitizer: &to-string-sanitizer
+  pattern-either:
+    - pattern: String(...)
+    - pattern: $X.toString()
+    - pattern: '`...`'
+    - pattern: '"..." + $X'
+    - pattern: ObjectId(...)
+    - pattern: new ObjectId(...)
+    - pattern: $M.Types.ObjectId(...)
+    - pattern: new $M.Types.ObjectId(...)
+    - patterns:
+        - pattern-either:
+            - pattern: $F(...)
+            - pattern: $O.$F(...)
+        - metavariable-regex:
+            metavariable: $F
+            regex: (?i)^(mongo_?sanitize|sanitize\w*|\w*sanitize|sanitizefilter)$
+
+x-nosql-owasp: &nosql-owasp ["A03:2021 - Injection", "A05:2025 - Injection"]
+
+rules:
+  - id: aegiscode.javascript.nosql-injection.tainted-query-filter
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Request data is used as a MongoDB/Mongoose query filter without converting it to
+      a plain value. A JSON body like {"password": {"$ne": null}} turns the check into
+      "any password" and bypasses login (operator injection). Convert values with
+      String() / Number(), validate the body with a schema, or use mongo-sanitize.
+    metadata:
+      vulnerability_type: nosql-injection
+      cwe: "CWE-943"
+      owasp: *nosql-owasp
+      aegiscode_severity: high
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers:
+      - *number-sanitizer
+      - *to-string-sanitizer
+      # Regex values are reported by tainted-regex-query instead.
+      - pattern-either:
+          - pattern: new RegExp(...)
+          - pattern: RegExp(...)
+          - pattern: '{..., $regex: $X, ...}'
+    pattern-sinks:
+      - patterns:
+          - pattern: $MODEL.$METHOD($FILTER, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(find|findOne|findOneAndUpdate|findOneAndDelete|findOneAndReplace|findOneAndRemove|updateOne|updateMany|deleteOne|deleteMany|replaceOne|countDocuments|count|exists|remove)$
+          - focus-metavariable: $FILTER
+
+  - id: aegiscode.javascript.nosql-injection.tainted-where-operator
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Request data reaches a MongoDB $where clause. $where runs JavaScript inside the
+      database, so an attacker can run their own code there (e.g. sleep() for denial of
+      service, or always-true conditions). Replace $where with normal query operators.
+    metadata:
+      vulnerability_type: nosql-injection
+      cwe: "CWE-943"
+      owasp: *nosql-owasp
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., $where: $CODE, ...}'
+              - pattern: $QUERY.$where($CODE)
+          - focus-metavariable: $CODE
+
+  - id: aegiscode.javascript.nosql-injection.tainted-regex-query
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Request data is used as a regular expression in a database query ($regex or
+      new RegExp). An attacker can match everything (".*") or send a slow pattern that
+      ties up the database (ReDoS). Escape the input first (e.g. _.escapeRegExp or
+      escape-string-regexp).
+    metadata:
+      vulnerability_type: nosql-injection
+      cwe: "CWE-943"
+      owasp: *nosql-owasp
+      aegiscode_severity: medium
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers:
+      - *number-sanitizer
+      - patterns:
+          - pattern-either:
+              - pattern: $F(...)
+              - pattern: $O.$F(...)
+          - metavariable-regex:
+              metavariable: $F
+              regex: (?i)^(\w*escape\w*)$
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: '{..., $regex: $PATTERN, ...}'
+              - pattern: '$MODEL.$METHOD({..., $FIELD: new RegExp($PATTERN, ...), ...}, ...)'
+              - pattern: '$MODEL.$METHOD({..., $FIELD: RegExp($PATTERN, ...), ...}, ...)'
+          - focus-metavariable: $PATTERN

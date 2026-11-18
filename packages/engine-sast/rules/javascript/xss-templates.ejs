@@ -1,0 +1,7 @@
+<!-- Test cases for xss-templates.yaml (EJS). Deliberately vulnerable, never shipped. -->
+<!-- ruleid: aegiscode.javascript.xss.template-unescaped-output -->
+<div class="bio"><%- user.bio %></div>
+<!-- ok: aegiscode.javascript.xss.template-unescaped-output -->
+<div class="bio"><%= user.bio %></div>
+<!-- ok: aegiscode.javascript.xss.template-unescaped-output -->
+<%- include('partials/header') %>

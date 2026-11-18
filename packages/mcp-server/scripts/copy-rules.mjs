@@ -1,7 +1,7 @@
 // Copies AegisCode's own Semgrep rules into dist/rules so they ship inside the npm package.
-// Rule TEST files (the .js/.ts files next to each rule) are NOT copied: they contain
-// deliberately vulnerable code and are only needed for `semgrep --test`.
-import { cpSync, existsSync, rmSync } from "node:fs";
+// Only the .yaml rule files are copied. The test files next to them (.js, .ts, .jsx, .ejs,
+// .pug, ...) contain deliberately vulnerable code and are only needed for `semgrep --test`.
+import { cpSync, existsSync, rmSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const from = fileURLToPath(new URL("../../engine-sast/rules/", import.meta.url));
@@ -14,5 +14,5 @@ if (!existsSync(from)) {
 }
 cpSync(from, to, {
   recursive: true,
-  filter: (source) => !/\.(js|jsx|ts|tsx)$/.test(source),
+  filter: (source) => statSync(source).isDirectory() || /\.ya?ml$/.test(source),
 });

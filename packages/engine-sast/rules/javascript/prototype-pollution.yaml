@@ -1,0 +1,203 @@
+# AegisCode SAST rules: prototype pollution (CWE-1321).
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-koa-source: &koa-source
+  patterns:
+    - pattern-either:
+        - pattern: $CTX.request.body
+        - pattern: $CTX.request.query
+        - pattern: $CTX.query
+        - pattern: $CTX.params
+    - metavariable-regex:
+        metavariable: $CTX
+        regex: ^ctx$
+
+x-nest-source: &nest-source
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $M(..., @$D(...) $P: $T, ...) {...}
+        - pattern-inside: |
+            $M(..., @$D(...) $P, ...) {...}
+    - metavariable-regex:
+        metavariable: $D
+        regex: ^(Body|Query|Param|Headers|Req|Request)$
+    - focus-metavariable: $P
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+x-pp-owasp: &pp-owasp ["A08:2021 - Software and Data Integrity Failures", "A08:2025 - Software or Data Integrity Failures"]
+
+rules:
+  - id: aegiscode.javascript.prototype-pollution.tainted-key-assignment
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A property name taken from the request is used to write into a nested object
+      (obj[key1][key2] = value). With key1 = "__proto__" an attacker changes
+      Object.prototype for the whole application (prototype pollution), which can
+      break checks or lead to code execution. Reject "__proto__", "constructor" and
+      "prototype" keys, or use a Map / Object.create(null).
+    metadata:
+      vulnerability_type: prototype-pollution
+      cwe: "CWE-1321"
+      owasp: *pp-owasp
+      aegiscode_severity: high
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern: $OBJ[$KEY1][$KEY2] = $VALUE
+          - pattern-not-inside: |
+              $OBJ = Object.create(null)
+              ...
+          - focus-metavariable: $KEY1
+      - patterns:
+          - pattern-inside: |
+              $INNER = $OBJ[$KEY1]
+              ...
+          - pattern: $INNER[$KEY2] = $VALUE
+          - focus-metavariable: $KEY2
+
+  - id: aegiscode.javascript.prototype-pollution.unsafe-recursive-merge
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      This recursive merge/copy function walks every key of the source object and
+      recurses into it without skipping "__proto__" and "constructor". Merging a
+      parsed JSON body such as {"__proto__": {"isAdmin": true}} pollutes
+      Object.prototype. Skip those keys (or check Object.hasOwn on the target) before
+      recursing.
+    metadata:
+      vulnerability_type: prototype-pollution
+      cwe: "CWE-1321"
+      owasp: *pp-owasp
+      aegiscode_severity: medium
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              function $FN($TARGET, $SOURCE, ...) { ... }
+          - pattern-inside: |
+              $FN = function ($TARGET, $SOURCE, ...) { ... }
+          - pattern-inside: |
+              $FN = ($TARGET, $SOURCE, ...) => { ... }
+      - pattern-either:
+          - pattern-inside: |
+              for ($KEY in $SOURCE) { ... }
+          - pattern-inside: |
+              for ($KEY of Object.keys($SOURCE)) { ... }
+          - pattern-inside: |
+              Object.keys($SOURCE).forEach(($KEY) => { ... })
+          - pattern-inside: |
+              Object.keys($SOURCE).forEach(function ($KEY) { ... })
+      - pattern: $FN($TARGET[$KEY], $SOURCE[$KEY], ...)
+      - pattern-not-inside: |
+          if (<... "__proto__" ...>) $STMT;
+          ...
+      - pattern-not-inside: |
+          if (<... "__proto__" ...>) { ... }
+          ...
+      - pattern-not-inside: |
+          if (<... "__proto__" ...>) { ... }
+      - pattern-not-inside: |
+          if (<... $SAFE($KEY) ...>) { ... }
+          ...
+      - pattern-not-inside: |
+          if (<... $SAFE($KEY) ...>) $STMT;
+          ...
+
+  - id: aegiscode.javascript.prototype-pollution.tainted-deep-merge
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Data from the request is deep-merged into an object (_.merge, defaultsDeep,
+      $.extend(true, ...), a deepmerge helper). A body containing "__proto__" or
+      "constructor.prototype" can pollute Object.prototype, especially with older
+      library versions. Copy only the expected fields, or validate the body with a
+      schema first.
+    metadata:
+      vulnerability_type: prototype-pollution
+      cwe: "CWE-1321"
+      owasp: *pp-owasp
+      aegiscode_severity: medium
+      confidence: medium
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sinks:
+      - patterns:
+          - pattern: $LIB.$FUNC($TARGET, ..., $SOURCE, ...)
+          - metavariable-regex:
+              metavariable: $LIB
+              regex: ^(_|lodash|\$|jQuery|Hoek|hoek)$
+          - metavariable-regex:
+              metavariable: $FUNC
+              regex: ^(merge|mergeWith|defaultsDeep|extend|applyToDefaults)$
+          - focus-metavariable: $SOURCE
+      - patterns:
+          - pattern: $FUNC($TARGET, ..., $SOURCE, ...)
+          - metavariable-regex:
+              metavariable: $FUNC
+              regex: (?i)^(deep_?merge|merge_?deep|deep_?extend|deep_?assign|defaults_?deep|merge|extend)$
+          - focus-metavariable: $SOURCE
+
+  - id: aegiscode.javascript.prototype-pollution.tainted-set-by-path
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A property path from the request is used to set a value (_.set, objectPath.set,
+      dot-prop, set-value). A path such as "__proto__.isAdmin" or
+      "constructor.prototype.isAdmin" writes to Object.prototype. Allow only known
+      paths from a fixed list.
+    metadata:
+      vulnerability_type: prototype-pollution
+      cwe: "CWE-1321"
+      owasp: *pp-owasp
+      aegiscode_severity: high
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sinks:
+      - patterns:
+          - pattern: $LIB.$FUNC($OBJ, $PATH, ...)
+          - metavariable-regex:
+              metavariable: $LIB
+              regex: ^(_|lodash|objectPath|dotProp|dottie|dot)$
+          - metavariable-regex:
+              metavariable: $FUNC
+              regex: ^(set|setWith|update|updateWith|ensureExists|insert|push|zipObjectDeep)$
+          - focus-metavariable: $PATH
+      - patterns:
+          - pattern: $FUNC($OBJ, $PATH, $VALUE, ...)
+          - metavariable-regex:
+              metavariable: $FUNC
+              regex: ^(set|setWith|setValue|dset|setPath|setProperty)$
+          - focus-metavariable: $PATH
