@@ -16,10 +16,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
+    "test:rules": "node scripts/test-rules.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
     "@aegiscode/core": "*"
+  },
+  "devDependencies": {
+    "yaml": "^2.9.1"
   }
 }

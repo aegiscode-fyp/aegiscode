@@ -1,0 +1,232 @@
+# AegisCode SAST rules: OS command injection (CWE-78).
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-koa-source: &koa-source
+  patterns:
+    - pattern-either:
+        - pattern: $CTX.request.body
+        - pattern: $CTX.request.query
+        - pattern: $CTX.query
+        - pattern: $CTX.params
+    - metavariable-regex:
+        metavariable: $CTX
+        regex: ^ctx$
+
+x-nest-source: &nest-source
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $M(..., @$D(...) $P: $T, ...) {...}
+        - pattern-inside: |
+            $M(..., @$D(...) $P, ...) {...}
+    - metavariable-regex:
+        metavariable: $D
+        regex: ^(Body|Query|Param|Headers|Req|Request)$
+    - focus-metavariable: $P
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+x-shell-escape-sanitizer: &shell-escape-sanitizer
+  patterns:
+    - pattern-either:
+        - pattern: $F(...)
+        - pattern: $O.$F(...)
+    - metavariable-regex:
+        metavariable: $F
+        regex: (?i)^(shell_?escape\w*|escape_?shell\w*|quote)$
+
+# Calls to child_process, whichever way the module was imported.
+x-child-process-call: &child-process-call
+  pattern-either:
+    - patterns:
+        - pattern-either:
+            - pattern-inside: |
+                $CP = require("$MOD")
+                ...
+            - pattern-inside: |
+                import $CP from "$MOD"
+                ...
+            - pattern-inside: |
+                import * as $CP from "$MOD"
+                ...
+        - pattern: $CP.$FUNC($CMD, ...)
+    - pattern: require("$MOD").$FUNC($CMD, ...)
+    - patterns:
+        - pattern-either:
+            - pattern-inside: |
+                import { $FUNC } from "$MOD"
+                ...
+            - pattern-inside: |
+                const { $FUNC } = require("$MOD")
+                ...
+        - pattern: $FUNC($CMD, ...)
+
+rules:
+  - id: aegiscode.javascript.command-injection.tainted-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input from the request reaches a shell command (child_process). An attacker
+      can add their own commands with ; && | or $( ) and run anything on the server.
+      Use execFile()/spawn() with a fixed program and pass user values as separate
+      arguments, and validate them against an allow-list.
+    metadata:
+      vulnerability_type: command-injection
+      cwe: "CWE-78"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer, *shell-escape-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - *child-process-call
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(node:)?child_process$
+          - metavariable-regex:
+              metavariable: $FUNC
+              regex: ^(exec|execSync|spawn|spawnSync|execFile|execFileSync|fork)$
+          - focus-metavariable: $CMD
+
+  - id: aegiscode.javascript.command-injection.exec-non-literal
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A shell command is built from variables and run with exec()/execSync(). If any
+      part comes from a user, file name or other untrusted source, an attacker can
+      inject extra commands. Use execFile()/spawn() with an argument array instead.
+    metadata:
+      vulnerability_type: command-injection
+      cwe: "CWE-78"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: high
+      confidence: medium
+    options:
+      symbolic_propagation: true
+    patterns:
+      - *child-process-call
+      - metavariable-regex:
+          metavariable: $MOD
+          regex: ^(node:)?child_process$
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: ^(exec|execSync)$
+      - metavariable-pattern:
+          metavariable: $CMD
+          patterns:
+            - pattern-either:
+                - pattern: '$OTHER + $INPUT'
+                - pattern: '$INPUT + $OTHER'
+                - pattern: '`...${$INPUT}...`'
+                - pattern: '[..., $INPUT, ...].join(...)'
+            - metavariable-pattern:
+                metavariable: $INPUT
+                patterns:
+                  - pattern-not: '"..."'
+                  - pattern-not: $A + $B
+                  - pattern-not: parseInt(...)
+                  - pattern-not: Number(...)
+                  - pattern-not-regex: ^\d+$
+
+  - id: aegiscode.javascript.command-injection.spawn-shell-true
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      spawn()/execFile() is run with shell: true and a non-constant command or
+      argument. With a shell, arguments are parsed by the shell again, so
+      metacharacters in them run extra commands. Remove shell: true and pass
+      arguments as an array.
+    metadata:
+      vulnerability_type: command-injection
+      cwe: "CWE-78"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: high
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: '$CP.$FUNC($CMD, ..., {..., shell: $SHELL, ...})'
+              - metavariable-pattern:
+                  metavariable: $CMD
+                  patterns:
+                    - pattern-not: '"..."'
+          - patterns:
+              - pattern: '$CP.$FUNC($CMD, $ARGS, {..., shell: $SHELL, ...})'
+              - metavariable-pattern:
+                  metavariable: $ARGS
+                  patterns:
+                    - pattern: '[..., $ARG, ...]'
+                    - metavariable-pattern:
+                        metavariable: $ARG
+                        patterns:
+                          - pattern-not: '"..."'
+          - patterns:
+              - pattern: '$CP.$FUNC($CMD, $ARGS, {..., shell: $SHELL, ...})'
+              - pattern-not: '$CP.$FUNC($CMD, [...], {...})'
+      - metavariable-regex:
+          metavariable: $FUNC
+          regex: ^(spawn|spawnSync|execFile|execFileSync)$
+      - metavariable-pattern:
+          metavariable: $SHELL
+          patterns:
+            - pattern-not: "false"
+            - pattern-not: undefined
+
+  - id: aegiscode.javascript.command-injection.tainted-shell-library
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      User input from the request reaches a shell command run by shelljs or execa's
+      command API. The string is parsed by a shell, so an attacker can inject extra
+      commands. Use execa(file, [args]) with an argument array and validate inputs.
+    metadata:
+      vulnerability_type: command-injection
+      cwe: "CWE-78"
+      owasp: ["A03:2021 - Injection", "A05:2025 - Injection"]
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer, *shell-escape-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern: $SH.exec($CMD, ...)
+          - metavariable-regex:
+              metavariable: $SH
+              regex: ^(shell|shelljs|sh)$
+          - focus-metavariable: $CMD
+      - patterns:
+          - pattern-either:
+              - pattern: execaCommand($CMD, ...)
+              - pattern: execaCommandSync($CMD, ...)
+              - pattern: execa.command($CMD, ...)
+              - pattern: execa.commandSync($CMD, ...)
+          - focus-metavariable: $CMD

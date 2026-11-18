@@ -1,0 +1,132 @@
+# AegisCode SAST rules: insecure authentication, session and CORS configuration
+# (CWE-347, CWE-614, CWE-942).
+
+x-misconfig-owasp: &misconfig-owasp ["A05:2021 - Security Misconfiguration", "A02:2025 - Security Misconfiguration"]
+x-auth-owasp: &auth-owasp ["A07:2021 - Identification and Authentication Failures", "A07:2025 - Authentication Failures"]
+
+rules:
+  - id: aegiscode.javascript.insecure-auth-config.jwt-insecure-options
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      JSON Web Tokens are accepted or created without a real signature check: the
+      "none" algorithm is allowed, expiry is ignored, or verification is switched off.
+      An attacker can forge or replay tokens and log in as anyone. Pin the algorithm
+      (algorithms: ["HS256"] or ["RS256"]) and keep expiry checks on.
+    metadata:
+      vulnerability_type: insecure-auth-config
+      cwe: "CWE-347"
+      owasp: *auth-owasp
+      aegiscode_severity: critical
+      confidence: high
+    pattern-either:
+      - pattern: '$JWT.verify($TOKEN, $KEY, {..., algorithms: [..., "none", ...], ...}, ...)'
+      - pattern: '$JWT.sign($PAYLOAD, $KEY, {..., algorithm: "none", ...}, ...)'
+      - pattern: '$JWT.verify($TOKEN, $KEY, {..., ignoreExpiration: true, ...}, ...)'
+      - pattern: $JWTSIMPLE.decode($TOKEN, $KEY, true, ...)
+
+  - id: aegiscode.javascript.insecure-auth-config.jwt-decode-without-verify
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      jwt.decode() reads a token without checking its signature, and no jwt.verify()
+      runs first in this code path. Anyone can create a token with any content, so
+      trusting decoded data (user id, role) lets them impersonate users. Use
+      jwt.verify(token, key, { algorithms: [...] }) and trust only its result.
+    metadata:
+      vulnerability_type: insecure-auth-config
+      cwe: "CWE-347"
+      owasp: *auth-owasp
+      aegiscode_severity: high
+      confidence: medium
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $JWT = require("jsonwebtoken")
+              ...
+          - pattern-inside: |
+              import $JWT from "jsonwebtoken"
+              ...
+          - pattern-inside: |
+              import * as $JWT from "jsonwebtoken"
+              ...
+      - pattern: $JWT.decode(...)
+      - pattern-not-inside: |
+          $JWT.verify(...);
+          ...
+      - pattern-not-inside: |
+          $V = $JWT.verify(...);
+          ...
+      - pattern-not-inside: |
+          $V = await $JWT.verify(...);
+          ...
+
+  - id: aegiscode.javascript.insecure-auth-config.insecure-cookie-flags
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      A session or auth cookie is set with httpOnly: false or secure: false. Without
+      httpOnly any XSS can steal the cookie; without secure it is sent over plain HTTP
+      where it can be sniffed. Set httpOnly: true, secure: true and sameSite: "lax"
+      (or "strict").
+    metadata:
+      vulnerability_type: insecure-auth-config
+      cwe: "CWE-614"
+      owasp: *misconfig-owasp
+      aegiscode_severity: medium
+      confidence: high
+    patterns:
+      - pattern-either:
+          - pattern: '$RES.cookie($NAME, $VALUE, {..., $FLAG: false, ...})'
+          - pattern: '$SESSION({..., cookie: {..., $FLAG: false, ...}, ...})'
+          - patterns:
+              - pattern: '$COOKIESESSION({..., $FLAG: false, ...})'
+              - metavariable-regex:
+                  metavariable: $COOKIESESSION
+                  regex: (?i)^(cookiesession|cookie_session)$
+      - metavariable-regex:
+          metavariable: $FLAG
+          regex: ^(httpOnly|secure)$
+
+  - id: aegiscode.javascript.insecure-auth-config.permissive-cors
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      CORS allows any origin together with credentials (origin: true / "*" with
+      credentials: true, or the request's Origin header echoed back). Any website can
+      then make logged-in requests to this API and read the answers. Allow only a
+      fixed list of trusted origins.
+    metadata:
+      vulnerability_type: insecure-auth-config
+      cwe: "CWE-942"
+      owasp: *misconfig-owasp
+      aegiscode_severity: medium
+      confidence: high
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: cors($OPTIONS)
+              - pattern: $APP.enableCors($OPTIONS)
+          - metavariable-pattern:
+              metavariable: $OPTIONS
+              patterns:
+                - pattern: '{..., credentials: true, ...}'
+                - pattern-either:
+                    - pattern: '{..., origin: true, ...}'
+                    - pattern: '{..., origin: "*", ...}'
+                    - pattern: '{..., origin: ($O, $CB) => $CB(null, true), ...}'
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.setHeader("$HEADER", $VALUE)
+              - pattern: $RES.set("$HEADER", $VALUE)
+              - pattern: $RES.header("$HEADER", $VALUE)
+          - metavariable-regex:
+              metavariable: $HEADER
+              regex: (?i)^access-control-allow-origin$
+          - metavariable-pattern:
+              metavariable: $VALUE
+              pattern-either:
+                - pattern: $REQ.headers.origin
+                - pattern: $REQ.headers["origin"]
+                - pattern: $REQ.get("origin")
+                - pattern: $REQ.header("origin")

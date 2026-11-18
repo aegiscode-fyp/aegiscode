@@ -1,0 +1,104 @@
+# AegisCode SAST rules: open redirect (CWE-601).
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-koa-source: &koa-source
+  patterns:
+    - pattern-either:
+        - pattern: $CTX.request.body
+        - pattern: $CTX.request.query
+        - pattern: $CTX.query
+        - pattern: $CTX.params
+    - metavariable-regex:
+        metavariable: $CTX
+        regex: ^ctx$
+
+x-nest-source: &nest-source
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $M(..., @$D(...) $P: $T, ...) {...}
+        - pattern-inside: |
+            $M(..., @$D(...) $P, ...) {...}
+    - metavariable-regex:
+        metavariable: $D
+        regex: ^(Body|Query|Param|Headers|Req|Request)$
+    - focus-metavariable: $P
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+rules:
+  - id: aegiscode.javascript.open-redirect.tainted-redirect
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      The response redirects to a URL taken from the request (e.g. ?next=...). An
+      attacker can send users a link to your site that forwards them to a phishing
+      page. Redirect only to relative paths you check (starting with a single "/"),
+      or to entries of an allow-list.
+    metadata:
+      vulnerability_type: open-redirect
+      cwe: "CWE-601"
+      owasp: ["A01:2021 - Broken Access Control", "A01:2025 - Broken Access Control"]
+      aegiscode_severity: medium
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.redirect($URL)
+              - pattern: $RES.redirect($STATUS, $URL)
+              - pattern: $RES.location($URL)
+              - pattern: $RES.setHeader("$HEADER", $URL)
+              - pattern: $RES.set("$HEADER", $URL)
+              - pattern: $RES.header("$HEADER", $URL)
+              - pattern: '$RES.writeHead($STATUS, {..., Location: $URL, ...})'
+          - metavariable-regex:
+              metavariable: $RES
+              regex: (?i)^(_?res(ponse)?|ctx|reply)$
+          - pattern-not: $RES.setHeader("$OTHER", $URL)
+          - pattern-not: $RES.set("$OTHER", $URL)
+          - pattern-not: $RES.header("$OTHER", $URL)
+          - metavariable-regex:
+              metavariable: $URL
+              regex: (?s)^(?!["'`](/[^/\\"'`]|https?://[^/"'`$]+/)).*
+          - focus-metavariable: $URL
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.setHeader("$HEADER", $URL)
+              - pattern: $RES.set("$HEADER", $URL)
+              - pattern: $RES.header("$HEADER", $URL)
+          - metavariable-regex:
+              metavariable: $HEADER
+              regex: (?i)^location$
+          - metavariable-regex:
+              metavariable: $URL
+              regex: (?s)^(?!["'`](/[^/\\"'`]|https?://[^/"'`$]+/)).*
+          - focus-metavariable: $URL

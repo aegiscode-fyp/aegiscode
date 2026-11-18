@@ -1,0 +1,149 @@
+# AegisCode SAST rules: code injection (CWE-95, CWE-94).
+# Top-level x-* keys are shared YAML anchors used by the rules below; Semgrep ignores them.
+# The request-source anchors are identical in every taint rule file: change them everywhere at once.
+
+x-request-source: &request-source
+  patterns:
+    - pattern-inside: function ... ($REQ, ...) {...}
+    - metavariable-regex:
+        metavariable: $REQ
+        regex: (?i)^_?req(uest)?$
+    - pattern-either:
+        - pattern: $REQ.query
+        - pattern: $REQ.body
+        - pattern: $REQ.params
+        - pattern: $REQ.cookies
+        - pattern: $REQ.signedCookies
+        - pattern: $REQ.headers
+        - pattern: $REQ.get(...)
+        - pattern: $REQ.header(...)
+        - pattern: $REQ.originalUrl
+        - pattern: $REQ.url
+
+x-koa-source: &koa-source
+  patterns:
+    - pattern-either:
+        - pattern: $CTX.request.body
+        - pattern: $CTX.request.query
+        - pattern: $CTX.query
+        - pattern: $CTX.params
+    - metavariable-regex:
+        metavariable: $CTX
+        regex: ^ctx$
+
+x-nest-source: &nest-source
+  patterns:
+    - pattern-either:
+        - pattern-inside: |
+            $M(..., @$D(...) $P: $T, ...) {...}
+        - pattern-inside: |
+            $M(..., @$D(...) $P, ...) {...}
+    - metavariable-regex:
+        metavariable: $D
+        regex: ^(Body|Query|Param|Headers|Req|Request)$
+    - focus-metavariable: $P
+
+x-number-sanitizer: &number-sanitizer
+  pattern-either:
+    - pattern: parseInt(...)
+    - pattern: parseFloat(...)
+    - pattern: Number(...)
+    - pattern: Number.parseInt(...)
+    - pattern: Number.parseFloat(...)
+    - pattern: Boolean(...)
+
+x-code-owasp: &code-owasp ["A03:2021 - Injection", "A05:2025 - Injection"]
+
+rules:
+  - id: aegiscode.javascript.code-injection.tainted-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Request data is run as JavaScript code (eval, new Function, or a string passed to
+      setTimeout/setInterval). An attacker can execute any code on the server. Never
+      evaluate input; parse it with JSON.parse() or map it to a fixed set of actions.
+    metadata:
+      vulnerability_type: code-injection
+      cwe: "CWE-95"
+      owasp: *code-owasp
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($CODE)
+              - pattern: window.eval($CODE)
+              - pattern: global.eval($CODE)
+              - pattern: new Function(..., $CODE)
+              - pattern: Function(..., $CODE)
+              - pattern: setTimeout($CODE, ...)
+              - pattern: setInterval($CODE, ...)
+          - focus-metavariable: $CODE
+
+  - id: aegiscode.javascript.code-injection.tainted-vm-code
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Request data is run as code with the vm / vm2 module or a "safe eval" library.
+      The Node.js vm module is not a security sandbox, and vm2 has known escapes, so
+      this gives the attacker code execution. Do not run user-supplied code on the
+      server; if you must, isolate it in a separate process or container.
+    metadata:
+      vulnerability_type: code-injection
+      cwe: "CWE-94"
+      owasp: *code-owasp
+      aegiscode_severity: critical
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sanitizers: [*number-sanitizer]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: $VM.$METHOD($CODE, ...)
+                  - metavariable-regex:
+                      metavariable: $VM
+                      regex: ^(vm|nodeVm)$
+                  - metavariable-regex:
+                      metavariable: $METHOD
+                      regex: ^(runInNewContext|runInThisContext|runInContext|compileFunction)$
+              - pattern: new $VM.Script($CODE, ...)
+              - pattern: new $SANDBOX(...).run($CODE, ...)
+              - pattern: safeEval($CODE, ...)
+              - pattern: staticEval($CODE, ...)
+          - focus-metavariable: $CODE
+      - patterns:
+          - pattern-inside: |
+              $BOX = new $SANDBOX(...)
+              ...
+          - pattern: $BOX.run($CODE, ...)
+          - metavariable-regex:
+              metavariable: $SANDBOX
+              regex: ^(VM|NodeVM)$
+          - focus-metavariable: $CODE
+
+  - id: aegiscode.javascript.code-injection.tainted-dynamic-require
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A module path from the request is passed to require() or import(). An attacker
+      can load any module or file on the server, including uploaded files, and run it.
+      Map the input to a fixed list of allowed modules instead.
+    metadata:
+      vulnerability_type: code-injection
+      cwe: "CWE-94"
+      owasp: *code-owasp
+      aegiscode_severity: high
+      confidence: high
+    mode: taint
+    pattern-sources: [*request-source, *koa-source, *nest-source]
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: require($MODULE)
+              - pattern: import($MODULE)
+          - focus-metavariable: $MODULE
