@@ -7,6 +7,8 @@ import type { Logger } from "../logging/Logger.js";
  * and tests can hand in fakes.
  */
 export interface ToolContext {
+  /** The project the agent opened; relative paths in tool input are resolved against it. */
+  readonly projectDir: string;
   readonly pipeline: ScanPipeline;
   readonly store: FindingsStore;
   readonly logger: Logger;
