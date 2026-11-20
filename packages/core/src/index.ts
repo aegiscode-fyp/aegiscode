@@ -1,7 +1,7 @@
 export { ENGINE_TYPES, type EngineType } from "./domain/EngineType.js";
 export { Finding, type FindingLocation, type FindingProps } from "./domain/Finding.js";
 export { SEVERITIES, severityRank, type Severity } from "./domain/Severity.js";
-export { ScanEngine } from "./engines/ScanEngine.js";
+export { type EngineScanResult, ScanEngine } from "./engines/ScanEngine.js";
 export {
   AegisCodeError,
   DependencyError,

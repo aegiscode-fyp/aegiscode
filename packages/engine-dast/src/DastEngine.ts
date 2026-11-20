@@ -1,4 +1,4 @@
-import { type EngineType, type Finding, ScanEngine, ScanFailedError } from "@aegiscode/core";
+import { type EngineScanResult, type EngineType, ScanEngine, ScanFailedError } from "@aegiscode/core";
 
 /**
  * SRS class DastEngine. PLACEHOLDER until Phase 6, which replaces the body with:
@@ -10,11 +10,11 @@ export class DastEngine extends ScanEngine {
 
   async checkPrerequisites(): Promise<void> {}
 
-  async scan(_targetUrl: string): Promise<Finding[]> {
+  async scan(_targetUrl: string): Promise<EngineScanResult> {
     throw new ScanFailedError("The DAST engine is not implemented yet (Phase 6).");
   }
 
-  protected normalize(_raw: unknown): Finding[] {
-    return [];
+  protected normalize(_raw: unknown): EngineScanResult {
+    return { findings: [], warnings: [] };
   }
 }
