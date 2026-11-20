@@ -65,8 +65,8 @@ rules:
     message: >-
       User input from the request reaches a SQL query. An attacker can change the
       query (SQL injection) and read or modify the whole database. Pass the value as
-      a query parameter instead, e.g. db.query("SELECT * FROM users WHERE id = ?", [id])
-      or "... WHERE id = $1" with PostgreSQL.
+      a query parameter instead, e.g. db.query("SELECT * FROM users WHERE id = ?", [id]),
+      or PostgreSQL's numbered placeholders.
     metadata:
       vulnerability_type: sql-injection
       cwe: "CWE-89"
