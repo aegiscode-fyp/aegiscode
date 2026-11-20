@@ -7,6 +7,7 @@ import type { ToolContext } from "../tools/ToolContext.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 
 export interface ServerDependencies {
+  projectDir: string;
   pipeline: ScanPipeline;
   store: FindingsStore;
   logger: Logger;
@@ -30,6 +31,7 @@ export class AegisCodeMcpServer {
   ) {
     this.sdkServer = new McpServer({ name, version });
     this.context = {
+      projectDir: deps.projectDir,
       pipeline: deps.pipeline,
       store: deps.store,
       logger: deps.logger,

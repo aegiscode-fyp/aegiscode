@@ -107,7 +107,8 @@ describe("bundled Semgrep rules", () => {
       expect(owasp[1]).toMatch(/^A\d\d:2025 - /);
 
       // Findings leave the machine: a message must never repeat matched code or secret values.
-      expect(rule.message).not.toMatch(/\$[A-Z][A-Z0-9_]*/);
+      // Semgrep fills in $VARS and also $1-style regex groups (with text from the scanned file).
+      expect(rule.message).not.toMatch(/\$[A-Z0-9]/);
 
       if (rule.languages.includes("generic")) {
         expect(rule.paths?.include?.length, "generic rules must limit their file types").toBeGreaterThan(0);

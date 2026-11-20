@@ -1,0 +1,74 @@
+{
+  "version": "1.185.0",
+  "results": [
+    {
+      "check_id": "rules.javascript.aegiscode.javascript.sql-injection.string-built-query",
+      "path": "src/routes/users.js",
+      "start": { "line": 4, "col": 3, "offset": 80 },
+      "end": { "line": 4, "col": 61, "offset": 138 },
+      "extra": {
+        "message": "SQL query is built by inserting a variable into the query text.",
+        "metadata": {
+          "vulnerability_type": "sql-injection",
+          "cwe": "CWE-89",
+          "owasp": ["A03:2021 - Injection", "A05:2025 - Injection"],
+          "aegiscode_severity": "high",
+          "confidence": "medium"
+        },
+        "severity": "ERROR",
+        "fingerprint": "requires login",
+        "lines": "requires login",
+        "validation_state": "NO_VALIDATOR",
+        "engine_kind": "OSS"
+      }
+    },
+    {
+      "check_id": "rules.javascript.aegiscode.javascript.sql-injection.tainted-query",
+      "path": "src/routes/users.js",
+      "start": { "line": 4, "col": 12, "offset": 89 },
+      "end": { "line": 4, "col": 60, "offset": 137 },
+      "extra": {
+        "message": "User input from the request reaches a SQL query.",
+        "metadata": {
+          "vulnerability_type": "sql-injection",
+          "cwe": "CWE-89",
+          "owasp": ["A03:2021 - Injection", "A05:2025 - Injection"],
+          "aegiscode_severity": "critical",
+          "confidence": "high"
+        },
+        "metavars": { "$QUERY": { "abstract_content": "\"SELECT * FROM users WHERE pw = 'FIXTURE-SECRET-VALUE'\"" } },
+        "severity": "ERROR",
+        "fingerprint": "requires login",
+        "lines": "requires login",
+        "validation_state": "NO_VALIDATOR",
+        "engine_kind": "OSS"
+      }
+    },
+    {
+      "check_id": "home.dev.aegiscode.packages.engine-sast.rules.javascript.aegiscode.javascript.xss.tainted-response",
+      "path": "src\\routes\\users.js",
+      "start": { "line": 5, "col": 12, "offset": 150 },
+      "end": { "line": 5, "col": 42, "offset": 180 },
+      "extra": {
+        "message": "User input from the request is sent back in the response body.",
+        "metadata": { "vulnerability_type": "xss", "cwe": "CWE-79" },
+        "severity": "WARNING",
+        "fingerprint": "requires login",
+        "lines": "requires login",
+        "validation_state": "NO_VALIDATOR",
+        "engine_kind": "OSS"
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": 3,
+      "level": "warn",
+      "type": ["PartialParsing", [{ "path": "src/broken.js", "start": { "line": 1, "col": 1, "offset": 0 } }]],
+      "message": "Syntax error at line src/broken.js:1:\n `function broken( {\n  return 1` was unexpected",
+      "path": "src/broken.js"
+    }
+  ],
+  "paths": { "scanned": ["src/broken.js", "src/routes/users.js"] },
+  "skipped_rules": []
+}

@@ -14,6 +14,8 @@ export interface ScanResult {
   startedAt: string;
   durationMs: number;
   findings: Finding[];
+  /** The scan finished but may be incomplete; agents must see this (NFR-11). */
+  warnings: string[];
 }
 
 /**
@@ -59,13 +61,14 @@ export class ScanPipeline {
     }
     await engine.checkPrerequisites();
     const started = new Date();
-    const findings = await engine.scan(target);
+    const { findings, warnings } = await engine.scan(target);
     const result: ScanResult = {
       engine: engineType,
       target,
       startedAt: started.toISOString(),
       durationMs: Date.now() - started.getTime(),
       findings,
+      warnings,
     };
     await this.store?.save(result);
     return result;
