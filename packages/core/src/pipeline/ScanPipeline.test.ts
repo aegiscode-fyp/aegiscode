@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { EngineType } from "../domain/EngineType.js";
 import { Finding } from "../domain/Finding.js";
-import { ScanEngine } from "../engines/ScanEngine.js";
+import { type EngineScanResult, ScanEngine } from "../engines/ScanEngine.js";
 import { DependencyError, InvalidInputError } from "../errors.js";
 import { FindingsStore } from "../store/FindingsStore.js";
 import { ScanPipeline } from "./ScanPipeline.js";
@@ -13,11 +13,11 @@ import { ScanPipeline } from "./ScanPipeline.js";
 class FakeScanEngine extends ScanEngine {
   readonly engineType: EngineType = "SAST";
   async checkPrerequisites(): Promise<void> {}
-  async scan(target: string): Promise<Finding[]> {
+  async scan(target: string): Promise<EngineScanResult> {
     return this.normalize({ target });
   }
-  protected normalize(_raw: unknown): Finding[] {
-    return [
+  protected normalize(_raw: unknown): EngineScanResult {
+    const findings = [
       new Finding({
         findingId: "1",
         engine: "SAST",
@@ -35,6 +35,7 @@ class FakeScanEngine extends ScanEngine {
         location: { file: "b.js", line: 9 },
       }),
     ];
+    return { findings, warnings: ["b.js could not be fully parsed"] };
   }
 }
 
@@ -52,6 +53,7 @@ describe("ScanPipeline", () => {
 
     expect(result.engine).toBe("SAST");
     expect(result.findings).toHaveLength(2);
+    expect(result.warnings).toEqual(["b.js could not be fully parsed"]);
     const highOrWorse = await store.getFindings({ minSeverity: "high" });
     expect(highOrWorse.map((f) => f.vulnerabilityType)).toEqual(["sql-injection"]);
   });
