@@ -19,5 +19,13 @@ Any other MCP client (Cursor, Windsurf, ...): add a stdio server whose command i
 | Tool | What it does |
 |---|---|
 | `ping` | Checks the server is running; lists its tools and engines |
+| `scan_static` | Scans the project's JavaScript/TypeScript code with Semgrep and AegisCode's 52 bundled rules (injection, XSS, secrets, weak crypto, prototype pollution, path traversal, SSRF, ...) |
+| `get_findings` | Returns the saved findings of the latest scan, filtered by engine and severity |
 
-Requires Node.js 22 or newer.
+## Requirements
+
+- Node.js 22 or newer.
+- For `scan_static`: [Semgrep](https://semgrep.dev) installed, **or** Docker running (AegisCode then runs
+  Semgrep in a container with networking disabled). Rules are bundled; nothing is downloaded during a scan.
+
+Results are saved in `.aegiscode/findings.json` inside your project. Add `.aegiscode/` to your `.gitignore`.

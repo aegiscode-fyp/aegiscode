@@ -42,10 +42,10 @@ async function newServer(tools?: BaseTool[]): Promise<AegisCodeMcpServer> {
 }
 
 describe("AegisCodeMcpServer", () => {
-  it("lists the ping tool to an agent", async () => {
+  it("lists its tools to an agent", async () => {
     const client = await connect(await newServer());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(["ping"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["ping", "scan_static", "get_findings"]);
     expect(tools[0]?.annotations?.readOnlyHint).toBe(true);
     await client.close();
   });
@@ -57,8 +57,8 @@ describe("AegisCodeMcpServer", () => {
     expect(result.structuredContent).toEqual({
       server: "aegiscode",
       version: "0.1.0",
-      tools: ["ping"],
-      engines: [],
+      tools: ["ping", "scan_static", "get_findings"],
+      engines: ["SAST"],
     });
     await client.close();
   });
